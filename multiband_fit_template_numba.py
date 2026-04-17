@@ -839,6 +839,11 @@ def ComputeCoeffsAndCov_multiband(
     
     return coeffs, cov
 
+# -------------- Forward Facing Helper functions (require more imports) ------------------------
+import numpy as np
+import pandas as pd
+from scipy.signal import find_peaks
+import matplotlib.pyplot as plt
 filter_colors ={'u': '#0c71ff', 'g': '#49be61', 'r': '#c61c00', 'i': '#ffc200', 'z': '#f341a2', 'y': '#5d0000'}
 
 def template_fitting(tem, lc, print_outputs = False, fit_n = 20, coeff_n = 10, omega_n = 100.0, cols=['midpointMjdTai', 'band', 'psfMag', 'psfMagErr']):
@@ -848,13 +853,13 @@ def template_fitting(tem, lc, print_outputs = False, fit_n = 20, coeff_n = 10, o
     '''
     # compute best coefficients
     omegas = np.arange(1.1, 5.0, 0.1/omega_n) #periods from [0.2, 0.9]
-    rss = mbft.FitTemplate_multiband(tem, lc, omegas, NN=fit_n, use_errors=True, use_dust=False, use_band_shift=True, cols = cols)
+    rss = FitTemplate_multiband(tem, lc, omegas, NN=fit_n, use_errors=True, use_dust=False, use_band_shift=True, cols = cols)
     rss = np.array(rss)
     
     best_omega = omegas[np.argmin(rss)]
     best_pest = 1/best_omega
     
-    coeffs, cov = mbft.ComputeCoeffsAndCov_multiband(tem, lc, float(best_omega), NN=coeff_n, use_errors=True, use_dust=False, cols = cols)
+    coeffs, cov = ComputeCoeffsAndCov_multiband(tem, lc, float(best_omega), NN=coeff_n, use_errors=True, use_dust=False, cols = cols)
 
     # calculate error and posterior on period
     chi2_min = np.min(rss) # rss is chi2 bc it's already scaled by weights
@@ -886,9 +891,9 @@ def template_fitting(tem, lc, print_outputs = False, fit_n = 20, coeff_n = 10, o
         # print("cov (mu, d, a):\n", cov)
         # print(f"execution took {time.time() - start:0.2f} seconds")
 
-    return dict({'coeffs':coeffs, 'p_est':best_pest, 'cov':cov, 'variance':sigma_P, 'posterior':like_P, 'next_best':next_best, 'rss':rss})
+    return dict({'coeffs':coeffs, 'period':best_pest, 'cov':cov, 'variance':sigma_P, 'posterior':like_P, 'next_best':next_best, 'rss':rss})
 
-def plot_lc(lc_in, ax=None, mag=True, title=None, err_cutoff = 0.5, bare=True): #bare tells if you've put in just the light curve, or the whole gen_lc
+def plot_lc(lc_in, ax=None, mag=True, title=None, err_cutoff = 0.5, bare=True, filters = ['u', 'g', 'r', 'i', 'z', 'y']): #bare tells if you've put in just the light curve, or the whole gen_lc
     if ax is None:
         fig, ax = plt.subplots()
     if bare:
@@ -907,7 +912,7 @@ def plot_lc(lc_in, ax=None, mag=True, title=None, err_cutoff = 0.5, bare=True): 
         ax.invert_yaxis()
 
 #period in days
-def phase_fold_lc(lc_in, period, ax=None, mag=True, title=None, coeff=0, err_cutoff = 0.5, bare=True):
+def phase_fold_lc(lc_in, period, ax=None, mag=True, title=None, coeff=0, err_cutoff = 0.5, bare=True, filters = ['u', 'g', 'r', 'i', 'z', 'y']):
     if ax is None:
         fig, ax = plt.subplots()
     if bare:
