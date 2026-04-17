@@ -1,0 +1,2 @@
+This is a template fitter for RR Lyrae inspired by Stringer, et al., 2019 (https://arxiv.org/pdf/1905.00428).
+It finds the period and distance modulus, as well as other fit parameters (amplitude and multiband offset).

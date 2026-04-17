@@ -524,7 +524,7 @@ def reorder_coeffs_to_filter_order(coeffs, cov, lc_bands, filter_order):
 
 def FitTemplate_multiband(tem_py: Dict[str, Any], lc_py, omegas: np.ndarray, NN: int = 5,
                       cols: list = ['time', 'band', 'mag', 'error'], use_errors: bool = True, 
-                      use_dust: bool = True, use_band_shift: bool = False) -> np.ndarray:
+                      use_dust: bool = False, use_band_shift: bool = True, tol: float = 1e-6) -> np.ndarray:
     """
     Compute RSS for each omega using numba-compiled inner loops.
     
@@ -546,6 +546,8 @@ def FitTemplate_multiband(tem_py: Dict[str, Any], lc_py, omegas: np.ndarray, NN:
         Whether to fit dust extinction (disabled if use_band_shift=True)
     use_band_shift : bool
         Whether to fit per-band magnitude offsets (disables dust fitting)
+    tol : float
+        tolerance to determine if phi is converged
     
     Returns
     -------
@@ -605,7 +607,12 @@ def FitTemplate_multiband(tem_py: Dict[str, Any], lc_py, omegas: np.ndarray, NN:
         
         if use_band_shift:
             # NN Newton steps with band shifts (warm start)
+            iters = 0
+            diff = np.inf
+            # while iters < NN and diff > tol:
             for _ in range(NN):
+                
+                phi_old = phi
                 out = newton_update_multiband(phi, omega, m_temp, t, dust_obs, weights, 
                                                        band_of_obs, templates, templated, n_bands)
                 mu = out[0]
@@ -613,6 +620,8 @@ def FitTemplate_multiband(tem_py: Dict[str, Any], lc_py, omegas: np.ndarray, NN:
                 a = out[2]
                 phi = out[3]
                 band_shifts = out[4:]
+                iters += 1
+                diff = np.abs(phi - phi_old)
         else:
             # NN Newton steps without band shifts
             for _ in range(NN):
@@ -679,12 +688,14 @@ def ComputeCoeffs_multiband(tem_py: Dict[str, Any], lc_py, omega: float, NN: int
     phi = np.random.rand()
     J = 0
     a = 0.0
+    band_shifts = np.zeros(n_bands - 1, dtype=np.float64)
     
     while a == 0.0 and J < 10:
         for _ in range(NN):
             out = newton_update_multiband(phi, omega, m_temp, t, dust_obs, weights, 
                                                    band_of_obs, templates, templated, n_bands)
             mu, d, a, phi = out[0], out[1], out[2], out[3]
+            band_shifts = out[4:]
         J += 1
     
     # Shift phase back
@@ -698,7 +709,7 @@ def ComputeCoeffs_multiband(tem_py: Dict[str, Any], lc_py, omega: float, NN: int
     coeffs[2] = a
     coeffs[3] = phi_shifted
     for j in range(n_bands - 1):
-        coeffs[4 + j] = out[4 + j]
+        coeffs[4 + j] = band_shifts[j]
     
     return coeffs
 
@@ -810,7 +821,8 @@ def ComputeCoeffsAndCov_multiband(
         b = band_of_obs[i]
         offset_i = band_offsets[b] if b < n_bands - 1 else 0.0
         resid[i] = m_temp[i] - mu - d * dust_obs[i] - a * gammaf[i] - offset_i
-    
+
+    # print(weights * resid**2)
     chi2 = np.sum(weights * resid**2)
     dof = n_obs - n_params
     chi2_red = chi2 / dof if dof > 0 else 1.0
@@ -827,40 +839,32 @@ def ComputeCoeffsAndCov_multiband(
     
     return coeffs, cov
 
-filter_colors ={'u': '#0c71ff', 'g': '#49be61', 'r': '#c61c00',
-                      'i': '#ffc200', 'z': '#f341a2', 'y': '#5d0000'}
+filter_colors ={'u': '#0c71ff', 'g': '#49be61', 'r': '#c61c00', 'i': '#ffc200', 'z': '#f341a2', 'y': '#5d0000'}
 
-
-def template_fitting(tem, lc, print_outputs = False, use_dust = False, multiband = True, fit_n = 20, coeff_n = 10, omega_n = 100.0, cols=['midpointMjdTai', 'band', 'psfMag', 'psfMagErr']):
+def template_fitting(tem, lc, print_outputs = False, fit_n = 20, coeff_n = 10, omega_n = 100.0, cols=['midpointMjdTai', 'band', 'psfMag', 'psfMagErr']):
     '''
     Returns a dictionary with coeffs (mu, d, a, phi), pests (top 3), cov (of linear params: mu (distance modulus), d (dust), a (amplitude)), sigma_P (local uncertainty of a given period), 
         like_P (global posterior likelihood uncertainty), the next best 3 periods, gen_lc (the generated light curve)
     '''
     # compute best coefficients
     omegas = np.arange(1.1, 5.0, 0.1/omega_n) #periods from [0.2, 0.9]
-    rss = mbft.FitTemplate_multiband(tem, lc, omegas, NN=fit_n, use_errors=True, use_dust=False, cols = cols)
-        
+    rss = mbft.FitTemplate_multiband(tem, lc, omegas, NN=fit_n, use_errors=True, use_dust=False, use_band_shift=True, cols = cols)
+    rss = np.array(rss)
+    
     best_omega = omegas[np.argmin(rss)]
     best_pest = 1/best_omega
     
     coeffs, cov = mbft.ComputeCoeffsAndCov_multiband(tem, lc, float(best_omega), NN=coeff_n, use_errors=True, use_dust=False, cols = cols)
-        
 
-    rss = np.array(rss)
     # calculate error and posterior on period
     chi2_min = np.min(rss) # rss is chi2 bc it's already scaled by weights
 
     chi2_red = chi2_min / (len(lc.midpointMjdTai) - 4) # length - dof
-
-    # if chi2_red is approximately 1, then no need to scale anything
-    # if 0.5 <= chi2_red <= 2.0:
-    #     delta = 1.0
-    # else:
-    #     delta = chi2_red
         
     periods = 1/np.array(omegas)
     rms = np.sqrt(rss / (len(lc.midpointMjdTai) - 4)) # length - dof
     mask = rss <= chi2_min + 2.3
+   
     sigma_P = 0.5 * np.abs(periods[mask][0] - periods[mask][-1])
 
     # now get posterior likelihood to figure out how likely this is to be the right answer
@@ -868,18 +872,12 @@ def template_fitting(tem, lc, print_outputs = False, use_dust = False, multiband
     next_best_idx = np.argpartition(props['prominences'], -3)[-3:]
     next_best = periods[peaks[next_best_idx]]
     next_best_chi = rss[peaks[next_best_idx]]
-    # next_mask = rss <= 
-    # pests = 1/omegas[peaks[three_best]]
+   
     L = np.exp(-0.5 * (rss)) #convert to posterior - rss.min()
-    L /= np.trapezoid(L, periods) # probability density)
+    L /= np.trapezoid(L, periods) # probability density
     P_mean = np.trapezoid(periods * L, periods) # mean of the posterior
     P_var  = np.trapezoid((periods - P_mean)**2 * L, periods) #variance on the posterior
     like_P = np.sqrt(P_var) #std of posterior
-
-    # logL = -0.5 * (rss - rss.min())
-    # posterior = np.exp(logL)
-    # log_post /= np.trapezoid(posterior, periods)
-
 
     if print_outputs:
         # print("omega_best:", best_omega)
@@ -888,9 +886,9 @@ def template_fitting(tem, lc, print_outputs = False, use_dust = False, multiband
         # print("cov (mu, d, a):\n", cov)
         # print(f"execution took {time.time() - start:0.2f} seconds")
 
-    return [coeffs, best_pest, cov, sigma_P, like_P, next_best] #other_pests]
+    return dict({'coeffs':coeffs, 'p_est':best_pest, 'cov':cov, 'variance':sigma_P, 'posterior':like_P, 'next_best':next_best, 'rss':rss})
 
-def plot_lc(lc_in, ax=None, mag=False, title=None, err_cutoff = 0.5, bare=False): #bare tells if you've put in just the light curve, or the whole gen_lc
+def plot_lc(lc_in, ax=None, mag=True, title=None, err_cutoff = 0.5, bare=True): #bare tells if you've put in just the light curve, or the whole gen_lc
     if ax is None:
         fig, ax = plt.subplots()
     if bare:
@@ -909,7 +907,7 @@ def plot_lc(lc_in, ax=None, mag=False, title=None, err_cutoff = 0.5, bare=False)
         ax.invert_yaxis()
 
 #period in days
-def phase_fold_lc(lc_in, period, ax=None, mag=False, title=None, coeff=0, err_cutoff = 0.5, bare=False):
+def phase_fold_lc(lc_in, period, ax=None, mag=True, title=None, coeff=0, err_cutoff = 0.5, bare=True):
     if ax is None:
         fig, ax = plt.subplots()
     if bare:
@@ -923,13 +921,13 @@ def phase_fold_lc(lc_in, period, ax=None, mag=False, title=None, coeff=0, err_cu
         if title is None:
             title = f"Phase-Folded Lightcurve {lc.id} with period {period:0.3f} days at ({lc.ra:.2f}, {lc.dec:.2f})"
         phase = np.mod(this.midpointMjdTai + coeff*period, period)/period
-        # print(len(phase), len(plot_amp[err_mask]))
         ax.errorbar(phase, this.psfMag, yerr=this.psfMagErr, color=filter_colors[band], label=band, ls=' ', marker='.') #err_mask was on these
         ax.legend()
         ax.set(xlabel = 'phase', ylabel = ylabel, title=title)
     if mag:
         ax.invert_yaxis()
 
+        
 def extract_multiband_results(coeffs: np.ndarray, cov: np.ndarray, band_names: list = None) -> Dict[str, Any]:
     """
     Extract and organize multiband fitting results in a user-friendly format.
