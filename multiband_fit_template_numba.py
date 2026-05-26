@@ -874,24 +874,33 @@ def template_fitting(tem, lc, print_outputs = False, fit_n = 20, coeff_n = 10, o
 
     # now get posterior likelihood to figure out how likely this is to be the right answer
     peaks, props = find_peaks(-rss, prominence=10, width=0.1)
-    next_best_idx = np.argpartition(props['prominences'], -3)[-3:]
-    next_best = periods[peaks[next_best_idx]]
-    next_best_chi = rss[peaks[next_best_idx]]
+    try:
+        next_best_idx = np.argpartition(props['prominences'], -3)[-3:]
+        next_best = periods[peaks[next_best_idx]]
+        next_best_chi = rss[peaks[next_best_idx]]
+    except:
+        next_best = []
+
+    L = np.exp(-0.5 * (rss - rss.min()))  # subtract min to prevent underflow
+    norm = np.trapezoid(L, periods) 
+    if norm == 0 or ~np.isfinite(norm):
+        like_P = np.nan
+    else:
+        L /= norm # prob density
+        P_mean = np.trapezoid(periods * L, periods) # mean of posterior
+        P_var  = np.trapezoid((periods - P_mean)**2 * L, periods) # variance on posterior
+        like_P = np.sqrt(P_var) # std/likelihood of posterior
    
-    L = np.exp(-0.5 * (rss)) #convert to posterior - rss.min()
-    L /= np.trapezoid(L, periods) # probability density
-    P_mean = np.trapezoid(periods * L, periods) # mean of the posterior
-    P_var  = np.trapezoid((periods - P_mean)**2 * L, periods) #variance on the posterior
-    like_P = np.sqrt(P_var) #std of posterior
-
+    # L = np.exp(-0.5 * (rss)) #convert to posterior - rss.min()
+    # L /= np.trapezoid(L, periods) # probability density
+   
     if print_outputs:
-        # print("omega_best:", best_omega)
+        print("omega_best:", best_omega)
         print(f"pest: {best_pest:0.4f} +- {sigma_P:0.6f}, global uncertainty: {like_P:0.4f}")
-        # print("coeffs (mu, d, a, phi):", coeffs)  # [mu, d, a, phi]
+        print("coeffs (mu, d, a, phi):", coeffs)  # [mu, d, a, phi]
         # print("cov (mu, d, a):\n", cov)
-        # print(f"execution took {time.time() - start:0.2f} seconds")
 
-    return dict({'coeffs':coeffs, 'period':best_pest, 'cov':cov, 'variance':sigma_P, 'posterior':like_P, 'next_best':next_best, 'rss':rss})
+    return dict({'coeffs':coeffs, 'p_est':best_pest, 'cov':cov, 'variance':sigma_P, 'posterior':like_P, 'next_best':next_best, 'rss':rss})
 
 def plot_lc(lc_in, ax=None, mag=True, title=None, err_cutoff = 0.5, bare=True, filters = ['u', 'g', 'r', 'i', 'z', 'y']): #bare tells if you've put in just the light curve, or the whole gen_lc
     if ax is None:
